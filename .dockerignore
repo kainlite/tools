@@ -1,0 +1,9 @@
+.git
+.github
+.gitignore
+README.md
+Dockerfile
+.dockerignore
+**/*_test.go
+.env
+coverage.out
