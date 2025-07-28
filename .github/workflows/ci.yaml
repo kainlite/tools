@@ -112,3 +112,44 @@ jobs:
       uses: github/codeql-action/upload-sarif@v3
       with:
         sarif_file: 'trivy-results.sarif'
+
+  update-manifests:
+    needs: [build-and-push, security-scan]
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout manifest repository
+      uses: actions/checkout@v4
+      with:
+        repository: kainlite/tools-manifests
+        token: ${{ secrets.MANIFEST_REPO_TOKEN }}
+        path: manifests
+
+    - name: Set up yq
+      uses: mikefarah/yq@master
+
+    - name: Update deployment image
+      working-directory: manifests
+      run: |
+        yq eval '.spec.template.spec.containers[0].image = "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}"' -i 02-deployment.yaml
+        
+        # Verify the change
+        echo "Updated image tag:"
+        yq eval '.spec.template.spec.containers[0].image' 02-deployment.yaml
+
+    - name: Commit and push changes
+      working-directory: manifests
+      run: |
+        git config --local user.email "action@github.com"
+        git config --local user.name "GitHub Action"
+        
+        # Check if there are changes
+        if git diff --quiet; then
+          echo "No changes to commit"
+          exit 0
+        fi
+        
+        git add 02-deployment.yaml
+        git commit -m "Update image to sha-${{ github.sha }} from ${{ github.repository }}"
+        git push
