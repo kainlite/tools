@@ -4,8 +4,6 @@ on:
   push:
     branches: [ master ]
     tags: [ 'v*' ]
-  pull_request:
-    branches: [ master ]
 
 env:
   REGISTRY: ghcr.io
@@ -48,8 +46,6 @@ jobs:
     permissions:
       contents: read
       packages: write
-      actions: read
-      security-events: write
 
     steps:
     - name: Checkout repository
