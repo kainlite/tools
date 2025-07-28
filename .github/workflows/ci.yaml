@@ -116,7 +116,6 @@ jobs:
   update-manifests:
     needs: [build-and-push, security-scan]
     runs-on: ubuntu-latest
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     
     steps:
     - name: Checkout manifest repository
