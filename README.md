@@ -1,3 +1,3 @@
-# Tools
+# Zipbomb example
 
-Tool library to test remote services
+Go re-learning project, only for educational purposes.
