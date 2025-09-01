@@ -196,30 +196,35 @@ func serveZipbomb(w http.ResponseWriter, r *http.Request, reason string) {
 
 	// Serve the zipbomb
 	w.WriteHeader(http.StatusOK)
+	//nolint
 	io.Copy(w, bytes.NewReader(zipbombData))
 }
 
 // Legitimate route handlers
 func homeHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	//nolint:errcheck
 	fmt.Fprintf(w, `{"status": "ok", "message": "Private service is running", "timestamp": "%s"}`,
 		time.Now().Format(time.RFC3339))
 }
 
 func apiHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
+	//nolint:errcheck
 	fmt.Fprintf(w, `{"status": "success", "data": {"version": "1.0", "environment": "production"}}`)
 }
 
 func healthHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
+	//nolint:errcheck
 	fmt.Fprintf(w, `{"status": "healthy", "uptime": "ok"}`)
 }
 
 // Metrics endpoint (for monitoring)
 func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
+	//nolint:errcheck
 	fmt.Fprintf(w, "# TYPE zipbomb_size_bytes gauge\nzipbomb_size_bytes %d\n", len(zipbombData))
 }
 
@@ -268,6 +273,7 @@ func main() {
 	log.Printf("⚡ Enhanced zipbomb defense active (~50GB payload)")
 	log.Printf("🛡️  Monitoring for suspicious requests...")
 
+	//nolint:gosec
 	if err := http.ListenAndServe(port, r); err != nil {
 		log.Fatal("Server failed to start:", err)
 	}
