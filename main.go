@@ -25,6 +25,7 @@ import (
 // ATTACK LOGGING & STATISTICS
 // ==============================================
 
+
 // AttackEvent represents a single attack attempt
 type AttackEvent struct {
 	ID        int       `json:"id"`
