@@ -1988,7 +1988,7 @@ func serveDirectoryListing(w http.ResponseWriter, r *http.Request, dirPath strin
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
-	//nolint:errcheck
+	//nolint:errcheck,gosec // G705: intentional honeypot content
 	fmt.Fprintf(w, apacheDirectoryListingHTML, dirPath, dirPath, rows, host, port)
 }
 
@@ -2007,7 +2007,7 @@ func serveDownloadConfirmation(w http.ResponseWriter, r *http.Request, filename 
 	dlURL := fmt.Sprintf("/dl/%s/%s", token, filename)
 
 	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
-	//nolint:errcheck
+	//nolint:errcheck,gosec // G705: intentional honeypot content
 	fmt.Fprintf(w, downloadConfirmHTML, filename, dlURL)
 }
 
@@ -2305,11 +2305,10 @@ func serveZipbomb(w http.ResponseWriter, r *http.Request, reason string) {
 
 	// Determine content type from extension
 	contentType := "application/zip"
-	if strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz") {
+	switch {
+	case strings.HasSuffix(filename, ".tar.gz"), strings.HasSuffix(filename, ".tgz"), strings.HasSuffix(filename, ".sql.gz"):
 		contentType = "application/gzip"
-	} else if strings.HasSuffix(filename, ".sql.gz") {
-		contentType = "application/gzip"
-	} else if strings.HasSuffix(filename, ".bak") {
+	case strings.HasSuffix(filename, ".bak"):
 		contentType = "application/octet-stream"
 	}
 
@@ -2626,13 +2625,13 @@ func notFoundHandler(w http.ResponseWriter, r *http.Request) {
 		//nolint:gosec
 		hint := hints[rand.Intn(len(hints))]
 		logAttack(r, fmt.Sprintf("404 graduated response - stage 2 hint shown (count=%d) [RECON]", count))
-		//nolint:errcheck
+		//nolint:errcheck,gosec // G705: intentional honeypot content
 		fmt.Fprintf(w, apacheNotFoundHTML, r.URL.Path, hint+"\n", host, port)
 		return
 	}
 
 	// Stage 1: First ~8 requests - standard Apache 404
-	//nolint:errcheck
+	//nolint:errcheck,gosec // G705: intentional honeypot content
 	fmt.Fprintf(w, apacheNotFoundHTML, r.URL.Path, "", host, port)
 }
 
