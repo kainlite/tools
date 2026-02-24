@@ -1808,7 +1808,7 @@ type FakeUser struct {
 	Role      string `json:"role"`
 	Status    string `json:"status"`
 	LastLogin string `json:"last_login"`
-	APIKey    string `json:"api_key"`
+	APIKey    string `json:"api_key"` //nolint:gosec // G117: fake honeypot data
 }
 
 // PaginatedResponse for infinite pagination trolling
@@ -2240,6 +2240,7 @@ func logAttack(r *http.Request, reason string) {
 		}
 	}(event.IP, event.ID)
 
+	//nolint:gosec // G706: logging attacker-controlled data is intentional
 	log.Printf("🎯 ATTACK [%s] - Reason: %s | IP: %s | Path: %s | Method: %s | UA: %s | Referer: %s",
 		responseType, reason, getClientIP(r), r.URL.Path, r.Method, userAgent, referer)
 }
@@ -2791,7 +2792,7 @@ func main() {
 		//nolint:gosec
 		sessionID := fmt.Sprintf("sess_%d", rand.Intn(999999))
 		w.Header().Set("Content-Type", "text/html")
-		//nolint:errcheck
+		//nolint:errcheck,gosec // G705: intentional honeypot content
 		fmt.Fprintf(w, fakeLoginPageHTML, sessionID, clientIP)
 	})
 
@@ -2819,7 +2820,7 @@ func main() {
 	r.Post("/api/auth/verify", func(w http.ResponseWriter, r *http.Request) {
 		var creds struct {
 			Username string `json:"username"`
-			Password string `json:"password"`
+			Password string `json:"password"` //nolint:gosec // G117: capturing attacker credentials
 			Attempt  int    `json:"attempt"`
 		}
 		_ = json.NewDecoder(r.Body).Decode(&creds)
