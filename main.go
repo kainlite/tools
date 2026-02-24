@@ -4,8 +4,10 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/fnv"
 	"io"
 	"log"
 	"math/rand"
@@ -670,6 +672,89 @@ INSERT INTO 'api_keys' VALUES
 
 -- Nice try! This is a honeypot. Your IP has been logged.
 -- Dump completed on 2024-01-15 12:00:00
+`
+
+// Apache-style 404 page - identical to real Apache output
+var apacheNotFoundHTML = `<!DOCTYPE HTML PUBLIC "-//IETF//DTD HTML 2.0//EN">
+<html><head>
+<title>404 Not Found</title>
+</head><body>
+<h1>Not Found</h1>
+<p>The requested URL %s was not found on this server.</p>
+%s<hr>
+<address>Apache/2.4.41 (Ubuntu) Server at %s Port %s</address>
+</body></html>
+`
+
+// Download confirmation page - mimics cPanel/Plesk backup UI
+var downloadConfirmHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Preparing Download - Backup Manager</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; display: flex; align-items: center; justify-content: center; min-height: 100vh; }
+        .container { background: white; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); padding: 40px; max-width: 500px; width: 90%%; text-align: center; }
+        h2 { color: #333; margin-bottom: 8px; }
+        .filename { color: #666; font-family: monospace; font-size: 14px; margin-bottom: 24px; word-break: break-all; }
+        .progress-container { background: #e9ecef; border-radius: 4px; height: 24px; overflow: hidden; margin-bottom: 16px; }
+        .progress-bar { background: linear-gradient(90deg, #28a745, #20c997); height: 100%%; width: 0%%; transition: width 0.5s ease; border-radius: 4px; }
+        .status { color: #666; font-size: 14px; margin-bottom: 8px; }
+        .details { color: #999; font-size: 12px; }
+        .icon { font-size: 48px; margin-bottom: 16px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="icon">&#128230;</div>
+        <h2>Preparing Download</h2>
+        <p class="filename">%s</p>
+        <div class="progress-container"><div class="progress-bar" id="progress"></div></div>
+        <p class="status" id="status">Verifying file integrity...</p>
+        <p class="details" id="details">Please wait while we prepare your download</p>
+    </div>
+    <script>
+        var steps = [
+            {pct: 25, msg: "Verifying file integrity...", detail: "Checking checksums"},
+            {pct: 50, msg: "Checking permissions...", detail: "Validating access token"},
+            {pct: 75, msg: "Preparing archive...", detail: "Compressing data"},
+            {pct: 100, msg: "Starting download...", detail: "Redirecting..."}
+        ];
+        var i = 0;
+        function nextStep() {
+            if (i >= steps.length) {
+                window.location.href = "%s";
+                return;
+            }
+            document.getElementById("progress").style.width = steps[i].pct + "%%";
+            document.getElementById("status").textContent = steps[i].msg;
+            document.getElementById("details").textContent = steps[i].detail;
+            i++;
+            setTimeout(nextStep, 800 + Math.random() * 400);
+        }
+        setTimeout(nextStep, 500);
+    </script>
+</body>
+</html>`
+
+// Apache mod_autoindex directory listing HTML
+var apacheDirectoryListingHTML = `<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">
+<html>
+ <head>
+  <title>Index of %s</title>
+ </head>
+ <body>
+<h1>Index of %s</h1>
+  <table>
+   <tr><th valign="top"><img src="/icons/blank.gif" alt="[ICO]"></th><th><a href="?C=N;O=D">Name</a></th><th><a href="?C=M;O=A">Last modified</a></th><th><a href="?C=S;O=A">Size</a></th><th><a href="?C=D;O=A">Description</a></th></tr>
+   <tr><th colspan="5"><hr></th></tr>
+<tr><td valign="top"><img src="/icons/back.gif" alt="[PARENTDIR]"></td><td><a href="/">Parent Directory</a></td><td>&nbsp;</td><td align="right">  - </td><td>&nbsp;</td></tr>
+%s   <tr><th colspan="5"><hr></th></tr>
+</table>
+<address>Apache/2.4.41 (Ubuntu) Server at %s Port %s</address>
+</body></html>
 `
 
 // Fake login page HTML - looks realistic but wastes time
@@ -1781,6 +1866,151 @@ func randomString(n int) string {
 	return string(b)
 }
 
+// generateBackupFilename creates a realistic-looking backup filename
+func generateBackupFilename() string {
+	prefixes := []string{
+		"backup", "site_backup", "db_export", "prod_backup",
+		"daily_backup", "full_backup", "db_dump", "database_backup",
+		"wordpress_backup", "www_backup",
+	}
+	extensions := []string{
+		".zip", ".tar.gz", ".tgz", ".sql.gz", ".bak",
+	}
+
+	//nolint:gosec
+	prefix := prefixes[rand.Intn(len(prefixes))]
+	//nolint:gosec
+	ext := extensions[rand.Intn(len(extensions))]
+
+	// Generate a realistic timestamp from 1-14 days ago
+	//nolint:gosec
+	daysAgo := rand.Intn(14) + 1
+	ts := time.Now().AddDate(0, 0, -daysAgo)
+
+	// Vary the timestamp format
+	formats := []string{
+		"2006-01-02_1504",
+		"20060102",
+		"2006-01-02",
+		"01-02-2006",
+	}
+	//nolint:gosec
+	format := formats[rand.Intn(len(formats))]
+
+	return fmt.Sprintf("%s_%s%s", prefix, ts.Format(format), ext)
+}
+
+// setFakeFileHeaders adds realistic file-serving headers
+func setFakeFileHeaders(w http.ResponseWriter, filename string) {
+	//nolint:gosec
+	daysAgo := rand.Intn(14) + 1
+	lastMod := time.Now().AddDate(0, 0, -daysAgo)
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("Last-Modified", lastMod.UTC().Format(http.TimeFormat))
+
+	// Generate a deterministic ETag from the filename
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(filename))
+	w.Header().Set("ETag", fmt.Sprintf(`"%x-%x"`, h.Sum64(), len(zipbombData)))
+}
+
+// DirectoryEntry represents a file in a fake directory listing
+type DirectoryEntry struct {
+	Name    string
+	ModTime time.Time
+	Size    string
+}
+
+// generateDirectoryEntries creates deterministic fake directory entries based on path
+func generateDirectoryEntries(dirPath string) []DirectoryEntry {
+	// Use path-based seed so listings stay consistent across refreshes
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(dirPath))
+	//nolint:gosec
+	seededRand := rand.New(rand.NewSource(int64(h.Sum64())))
+
+	prefixes := []string{
+		"backup", "site_backup", "db_export", "prod_backup",
+		"daily_backup", "full_backup", "db_dump", "wordpress_backup",
+	}
+	extensions := []string{".zip", ".tar.gz", ".tgz", ".sql.gz", ".bak"}
+
+	// Generate 2-4 entries
+	count := seededRand.Intn(3) + 2
+	entries := make([]DirectoryEntry, 0, count)
+
+	for i := 0; i < count; i++ {
+		prefix := prefixes[seededRand.Intn(len(prefixes))]
+		ext := extensions[seededRand.Intn(len(extensions))]
+		daysAgo := seededRand.Intn(14) + 1
+		ts := time.Now().AddDate(0, 0, -daysAgo)
+		filename := fmt.Sprintf("%s_%s%s", prefix, ts.Format("2006-01-02"), ext)
+
+		// Realistic file sizes (50MB - 2GB range)
+		sizeMB := seededRand.Intn(1950) + 50
+		var sizeStr string
+		if sizeMB >= 1024 {
+			sizeStr = fmt.Sprintf("%.1fG", float64(sizeMB)/1024.0)
+		} else {
+			sizeStr = fmt.Sprintf("%dM", sizeMB)
+		}
+
+		entries = append(entries, DirectoryEntry{
+			Name:    filename,
+			ModTime: ts,
+			Size:    sizeStr,
+		})
+	}
+
+	return entries
+}
+
+// serveDirectoryListing renders a fake Apache mod_autoindex page
+func serveDirectoryListing(w http.ResponseWriter, r *http.Request, dirPath string) {
+	logAttack(r, fmt.Sprintf("Directory listing viewed: %s [DIRECTORY_LISTING]", dirPath))
+
+	entries := generateDirectoryEntries(dirPath)
+
+	// Build table rows in exact Apache autoindex format
+	var rows string
+	for _, entry := range entries {
+		rows += fmt.Sprintf("<tr><td valign=\"top\"><img src=\"/icons/compressed.gif\" alt=\"[   ]\"></td><td><a href=\"%s%s\">%s</a></td><td align=\"right\">%s  </td><td align=\"right\">%s </td><td>&nbsp;</td></tr>\n",
+			dirPath, entry.Name, entry.Name,
+			entry.ModTime.Format("2006-01-02 15:04"),
+			entry.Size)
+	}
+
+	host := r.Host
+	port := "80"
+	if h, p, err := net.SplitHostPort(r.Host); err == nil {
+		host = h
+		port = p
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+	//nolint:errcheck
+	fmt.Fprintf(w, apacheDirectoryListingHTML, dirPath, dirPath, rows, host, port)
+}
+
+// serveDownloadConfirmation shows a fake "preparing download" page before serving zipbomb
+func serveDownloadConfirmation(w http.ResponseWriter, r *http.Request, filename string) {
+	logAttack(r, fmt.Sprintf("Download confirmation shown: %s [DOWNLOAD_CONFIRM]", filename))
+
+	// Generate a token for the download URL
+	tokenBytes := make([]byte, 16)
+	//nolint:gosec
+	for i := range tokenBytes {
+		tokenBytes[i] = byte(rand.Intn(256))
+	}
+	token := hex.EncodeToString(tokenBytes)
+
+	dlURL := fmt.Sprintf("/dl/%s/%s", token, filename)
+
+	w.Header().Set("Content-Type", "text/html; charset=UTF-8")
+	//nolint:errcheck
+	fmt.Fprintf(w, downloadConfirmHTML, filename, dlURL)
+}
+
 // Create a much larger zipbomb in memory
 func createZipbomb() ([]byte, error) {
 	var buf bytes.Buffer
@@ -1984,6 +2214,12 @@ func logAttack(r *http.Request, reason string) {
 		responseType = "FAKE_PHPMYADMIN"
 	} else if strings.Contains(reason, "INFINITE_API") {
 		responseType = "INFINITE_API"
+	} else if strings.Contains(reason, "DIRECTORY_LISTING") {
+		responseType = "DIRECTORY_LISTING"
+	} else if strings.Contains(reason, "RECON") {
+		responseType = "RECON"
+	} else if strings.Contains(reason, "DOWNLOAD_CONFIRM") {
+		responseType = "DOWNLOAD_CONFIRM"
 	}
 
 	// Record to attack log (for dashboard)
@@ -2010,7 +2246,19 @@ func logAttack(r *http.Request, reason string) {
 
 // Middleware to check for suspicious requests
 func zipbombMiddleware(next http.Handler) http.Handler {
+	// Paths exempt from suspicious path detection (handled by their own route handlers)
+	exemptPrefixes := []string{"/backup/", "/backups/", "/data/", "/export/", "/dl/"}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip suspicious path detection for directory listing routes
+		pathLower := strings.ToLower(r.URL.Path)
+		for _, prefix := range exemptPrefixes {
+			if strings.HasPrefix(pathLower, prefix) {
+				next.ServeHTTP(w, r)
+				return
+			}
+		}
+
 		clientIP := getClientIP(r)
 		isSuspicious := isSuspiciousPath(r.URL.Path)
 
@@ -2052,14 +2300,27 @@ func zipbombMiddleware(next http.Handler) http.Handler {
 func serveZipbomb(w http.ResponseWriter, r *http.Request, reason string) {
 	logAttack(r, reason+" [ZIPBOMB]")
 
-	// Make it look like a legitimate backup file
-	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", "attachment; filename=\"database_backup_full.zip\"")
+	// Generate a dynamic filename to look more realistic
+	filename := generateBackupFilename()
+
+	// Determine content type from extension
+	contentType := "application/zip"
+	if strings.HasSuffix(filename, ".tar.gz") || strings.HasSuffix(filename, ".tgz") {
+		contentType = "application/gzip"
+	} else if strings.HasSuffix(filename, ".sql.gz") {
+		contentType = "application/gzip"
+	} else if strings.HasSuffix(filename, ".bak") {
+		contentType = "application/octet-stream"
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(zipbombData)))
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
 	w.Header().Set("Pragma", "no-cache")
 	w.Header().Set("Expires", "0")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
+	setFakeFileHeaders(w, filename)
 
 	// Add a realistic delay to simulate file preparation
 	time.Sleep(200 * time.Millisecond)
@@ -2324,9 +2585,55 @@ func metricsHandler(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "# TYPE tracked_ips gauge\ntracked_ips %d\n", stats["tracked_ips"])
 }
 
-// Custom 404 handler that serves zipbomb
+// Graduated 404 handler - escalates response based on IP request count
 func notFoundHandler(w http.ResponseWriter, r *http.Request) {
-	serveZipbomb(w, r, "404 - Invalid endpoint")
+	clientIP := getClientIP(r)
+
+	// Get request count for this IP
+	requestTracker.mu.RLock()
+	info := requestTracker.requests[clientIP]
+	count := 0
+	if info != nil {
+		count = info.Count
+	}
+	requestTracker.mu.RUnlock()
+
+	// Determine host and port for Apache-style output
+	host := r.Host
+	port := "80"
+	if h, p, err := net.SplitHostPort(r.Host); err == nil {
+		host = h
+		port = p
+	}
+
+	// Stage 3: 15+ requests - serve zipbomb
+	if count >= 15 {
+		serveZipbomb(w, r, "404 graduated response - stage 3 [RECON]")
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=iso-8859-1")
+	w.WriteHeader(http.StatusNotFound)
+
+	// Stage 2: 8-14 requests - Apache 404 with breadcrumb hints
+	if count >= 8 {
+		//nolint:gosec
+		hints := []string{
+			"<!-- backup dir: /backup/ -->",
+			"<!-- TODO: remove old exports from /data/ -->",
+			"<!-- migrate backups to S3 - see /backups/ -->",
+		}
+		//nolint:gosec
+		hint := hints[rand.Intn(len(hints))]
+		logAttack(r, fmt.Sprintf("404 graduated response - stage 2 hint shown (count=%d) [RECON]", count))
+		//nolint:errcheck
+		fmt.Fprintf(w, apacheNotFoundHTML, r.URL.Path, hint+"\n", host, port)
+		return
+	}
+
+	// Stage 1: First ~8 requests - standard Apache 404
+	//nolint:errcheck
+	fmt.Fprintf(w, apacheNotFoundHTML, r.URL.Path, "", host, port)
 }
 
 func main() {
@@ -2337,6 +2644,15 @@ func main() {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(600 * time.Second)) // Extended timeout for slow drip
+
+	// Fake server headers - make it look like Apache/PHP
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Server", "Apache/2.4.41 (Ubuntu)")
+			w.Header().Set("X-Powered-By", "PHP/7.4.3")
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	// Custom middleware for zipbomb defense
 	r.Use(zipbombMiddleware)
@@ -2415,16 +2731,31 @@ func main() {
 	})
 
 	// ============================================
-	// ZIPBOMB TRAPS - Large file downloads
+	// FAKE DIRECTORY LISTINGS - Believable backup discovery
 	// ============================================
 
-	r.HandleFunc("/backup*", func(w http.ResponseWriter, r *http.Request) {
-		serveZipbomb(w, r, "Backup file access attempt")
+	// Directory listing pages
+	dirPaths := []string{"/backup/", "/backups/", "/data/", "/export/"}
+	for _, dp := range dirPaths {
+		dirPath := dp // capture for closure
+		r.Get(dirPath, func(w http.ResponseWriter, r *http.Request) {
+			serveDirectoryListing(w, r, dirPath)
+		})
+		// File downloads from directory listings -> download confirmation -> zipbomb
+		r.Get(dirPath+"{filename}", func(w http.ResponseWriter, r *http.Request) {
+			filename := chi.URLParam(r, "filename")
+			serveDownloadConfirmation(w, r, filename)
+		})
+	}
+
+	// Download endpoint (token-based) - serves the actual zipbomb
+	r.Get("/dl/{token}/{filename}", func(w http.ResponseWriter, r *http.Request) {
+		serveZipbomb(w, r, "Download confirmation completed")
 	})
 
-	r.HandleFunc("/export*", func(w http.ResponseWriter, r *http.Request) {
-		serveZipbomb(w, r, "Export file access attempt")
-	})
+	// ============================================
+	// ZIPBOMB TRAPS - Direct file downloads
+	// ============================================
 
 	r.Get("/database_backup.zip", func(w http.ResponseWriter, r *http.Request) {
 		serveZipbomb(w, r, "Database backup download")
@@ -2788,6 +3119,8 @@ func main() {
 	log.Printf("   🔐 Fake login/MFA pages: Multi-step time waster")
 	log.Printf("   📄 Infinite pagination: Never-ending API results")
 	log.Printf("   🗄️  Fake phpMyAdmin: Realistic database interface")
+	log.Printf("   📂 Fake directory listings: /backup/, /backups/, /data/, /export/")
+	log.Printf("   📋 Graduated 404: Apache HTML → breadcrumb hints → zipbomb")
 	log.Printf("   🌍 GeoIP lookups: IP geolocation tracking")
 	log.Printf("   🚦 Behavioral detection: %d req/min, %d suspicious paths",
 		maxRequestsPerMinute, maxSuspiciousPaths)
